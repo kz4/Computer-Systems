@@ -1,2 +1,2 @@
-<img src="https://github.com/kz4/Computer-Systems/blob/branch/Computer-Systems/multi_process_computation/hw2-1.png"/>
-<img src="https://github.com/kz4/Computer-Systems/blob/branch/Computer-Systems/multi_process_computation/hw2-2.png"/>
+<img src="https://github.com/kz4/Computer-Systems/blob/master/multi_process_computation/hw2-1.png"/>
+<img src="https://github.com/kz4/Computer-Systems/blob/master/multi_process_computation/hw2-2.png"/>
