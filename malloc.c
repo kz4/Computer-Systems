@@ -206,7 +206,7 @@ void *buddy_malloc(size_t size)
             }
 
             if (next != NULL) {
-                next->meta.next = prev;
+                next->meta.prev = prev;
             }
             tmp->meta.prev = NULL;
             tmp->meta.next = NULL;
@@ -378,7 +378,7 @@ void buddy_free(void *ptr)
                 AVAIL[k] = TMP;
             }
             else{
-                block *curr = (block *) AVAIL[k];
+                block *curr = AVAIL[k];
                 //printf("b_free: curr=%p k=%u, TMP&=%p k=%u\n", curr, k, TMP, TMP->kval);
 //            if (curr != NULL) {
                 while (curr->meta.next != NULL) {
@@ -403,7 +403,6 @@ void buddy_free(void *ptr)
     }
 }
 
-
 /*
  * Returns the k for that size
  */
@@ -427,7 +426,6 @@ unsigned get_k(size_t size)
     //printf("get_k: End of getk\n");
     return k;
 }
-
 
 /*
  *
@@ -467,12 +465,12 @@ void split(unsigned k)
 
 
         // Add block of max size to the mth list
-        AVAIL[m] = ptr;
+        AVAIL[m] = (block *)ptr;
         AVAIL[m]->meta.tag = 1;
         AVAIL[m]->meta.kval = m;
         AVAIL[m]->meta.next = NULL;
         AVAIL[m]->meta.prev = NULL;
-        AVAIL[m]->meta.size = (size_t)1 << m;
+        AVAIL[m]->meta.size = (size_t)(1 << m);
         AVAIL[m]->meta.tid = pthread_self();
         AVAIL[m]->meta.magic=123456;
     }
@@ -487,15 +485,27 @@ void split(unsigned k)
     if (curr2 != NULL) {
         //      printf("split: AVAIL[k] isn't NULL\n");
         block *tmp = curr2;
-        block *PREV = tmp->meta.prev;
-        block *NEXT = tmp->meta.next;
+        block *PREV = curr2->meta.prev;
+        block *NEXT = curr2->meta.next;
 
         if (PREV == NULL) {
             //printf("b_free: BUD PREV was NULL\n");
             AVAIL[k] = NEXT;
         } else {
             PREV->meta.next = NEXT;
+
+            //?????
+//            NEXT->meta.prev = PREV;
         }
+
+//        if (NEXT == NULL) {
+//            PREV->meta.next = AVAIL[k];
+//        }
+        if (NEXT != NULL) {
+            NEXT->meta.prev = PREV;
+        }
+        tmp->meta.prev = NULL;
+        tmp->meta.next = NULL;
 
         block *list = AVAIL[k-1];
         if (list != NULL) {
@@ -504,18 +514,16 @@ void split(unsigned k)
             }
             list->meta.next = tmp;
             tmp->meta.prev = list;
-        }
-        else {
+        } else {
             AVAIL[k-1] = tmp;
             tmp->meta.prev = NULL;
         }
 
         tmp->meta.tag = 1;
         tmp->meta.kval = k - 1;
-        tmp->meta.size = (size_t)1 << (k - 1);
+        tmp->meta.size = (size_t)(1 << (k - 1));
         //      (block*) ((((void*)TMP - BASE) + ((size_t)1<<k)) + BASE);
-        block *SEC = (block *) (((size_t) AVAIL[k - 1]) +
-                                ((size_t) 1 << (k - 1)));
+        block *SEC = (block *) ((size_t) tmp + ((size_t)(1 << (k - 1))));
         //      printf("split: tmp=%p sex=%p from %u to %u\n", tmp, SEC, k, k-1);
         //      printf("split: tmp=%zx sex=%zx\n", (size_t)tmp - (size_t) BASE ,(size_t) SEC - (size_t) BASE);
         tmp->meta.next = SEC;
@@ -523,7 +531,7 @@ void split(unsigned k)
         SEC->meta.kval = k - 1;
         SEC->meta.next = NULL;
         SEC->meta.prev = tmp;
-        SEC->meta.size = (size_t)1 << (k - 1);
+        SEC->meta.size = (size_t)(1 << (k - 1));
         SEC->meta.tid = tmp->meta.tid;
         SEC->meta.magic=123456;
         printf("Split: AVAIL[%u] &=%p, AVAIL[%u]->next &%p\n", k-1, AVAIL[k-1], k-1,  SEC);
