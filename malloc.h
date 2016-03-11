@@ -3,7 +3,7 @@
 //
 
 #ifndef HW3_2_MALLOC_H
-
+#define HW3_2_MALLOC_H
 
 /*
  * This function initilizes the buddy malloc system
@@ -56,7 +56,5 @@ void buddy_free(void *);
 
 void split(unsigned k);
 unsigned get_k(size_t size);
-
-#define HW3_2_MALLOC_H
 
 #endif //HW3_2_MALLOC_H

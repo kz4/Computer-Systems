@@ -8,7 +8,6 @@
 #include <unistd.h>
 #include <pthread.h>
 
-#define MAX_MEM_SIZE
 #define HIGH_EXPONENT 14  //2^10 = 1024 Gigabytes, because the largest block is 512
 #define LOW_EXPONENT 6    // 2^5 = 32 bytes
 #define PAGE_SIZE sysconf(_SC_PAGESIZE)
@@ -59,7 +58,9 @@ void free(void *ptr)
 {
     //printf("interposed: buddy_free\n");
     MALLOC_LOCK;
-    buddy_free(ptr);
+    if (ptr != NULL) {
+        buddy_free(ptr);
+    }
     MALLOC_UNLOCK;
     return;
 }
@@ -294,7 +295,7 @@ void buddy_free(void *ptr)
     //printf("b_free: Start of free\n");
 
     // if the size > 512, unmmap
-    block *temp = ptr - sizeof(block);
+    block *temp = (block *)(ptr - sizeof(block));
     //if (temp->meta.size > 512) {
     if (temp->meta.magic == 654321 && temp->meta.tag== 0) {
         block *prev = temp->meta.prev;
@@ -314,10 +315,10 @@ void buddy_free(void *ptr)
 //        MALLOC_UNLOCK;
         return;
     } else if (temp->meta.magic == 123456 && temp->meta.tag == 0) {
-        block *TMP = (block *) ptr;
-        TMP--;
+//        block *temp = (block *) ptr;
+//        temp--;
 
-        if (TMP->meta.tag) {
+        if (temp->meta.tag) {
             perror("Attempting to free already freed pointer\n");
             //      exit(1);
             return;
@@ -326,11 +327,11 @@ void buddy_free(void *ptr)
 
         size_t buddy = 0;
         block *BUD = NULL;
-        size_t k = TMP->meta.kval;
+        size_t k = temp->meta.kval;
 
         if (k < MAX) {
 
-            BUD = (block *) ((((size_t) TMP - (size_t) BASE) ^ ((size_t) 1 << k))
+            BUD = (block *) ((((size_t) temp - (size_t) BASE) ^ ((size_t)(1 << k)))
                              + (size_t) BASE);
             //printf("b_free: Bud->tag=%u, k=%u, &=%p\n", BUD->tag, BUD->kval, BUD);
             //printf("b_free: tmp=%zx bud=%zx k=%u\n", (size_t)TMP - (size_t) BASE ,(size_t) BUD - (size_t) BASE, k);
@@ -349,17 +350,18 @@ void buddy_free(void *ptr)
             } else {
                 PREV->meta.next = BUD->meta.next;
             }
-            if (NEXT != NULL)
+            if (NEXT != NULL) {
                 NEXT->meta.prev = BUD->meta.prev;
+            }
 
             //printf("b_free: Buddy Available!\n");
 
             block * head;
             // Find the address that is smallest
-            if (BUD < TMP)
+            if (BUD < temp)
                 head = BUD;
             else
-                head = TMP;
+                head = temp;
             //printf("b_free: Mask=%zx, k=%u\n",((size_t) 1 << (TMP->kval)), TMP->kval);
             //printf("b_free: Merged&=%p k=%u, T&=%p, B&=%p k=%u\n", MERGE, k+1, TMP, BUD, k);
 
@@ -374,27 +376,26 @@ void buddy_free(void *ptr)
         } else {
             //printf("b_free: no buddy\n");
             if (AVAIL[k] == NULL){
-                TMP->meta.prev = NULL;
-                AVAIL[k] = TMP;
+                temp->meta.prev = NULL;
+                AVAIL[k] = temp;
             }
-            else{
+            else {
                 block *curr = AVAIL[k];
                 //printf("b_free: curr=%p k=%u, TMP&=%p k=%u\n", curr, k, TMP, TMP->kval);
 //            if (curr != NULL) {
                 while (curr->meta.next != NULL) {
                     curr = curr->meta.next;
                 }
-                TMP->meta.next = curr;
-                curr->meta.next = TMP;
+                temp->meta.prev = curr;
+                curr->meta.next = temp;
 //            } else {
 //                AVAIL[k] = TMP;
 //            }
-                TMP->meta.kval = k;
-                TMP->meta.prev = curr;
-                TMP->meta.next = NULL;
-                TMP->meta.tag = 1;
-                TMP->meta.size = (size_t)1 << k;
             }
+            temp->meta.kval = k;
+            temp->meta.next = NULL;
+            temp->meta.tag = 1;
+            temp->meta.size = (size_t)(1 << k);
         }
 
         //printf("b_free: End of buddy free\n");
