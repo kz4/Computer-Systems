@@ -20,7 +20,7 @@ typedef long long Align; // for alignment to long long (8 bytes) boundary
 
 union ublock {
     struct {
-        size_t tag;
+        size_t isFree;
         size_t kval;
         union ublock *prev;
         union ublock *next;
@@ -98,7 +98,7 @@ void buddy_init()
 
     // Add block of max size to the mth list
     AVAIL[order] = (block *) base;
-    AVAIL[order]->meta.tag = 1;
+    AVAIL[order]->meta.isFree = 1;
     AVAIL[order]->meta.kval = order;
     AVAIL[order]->meta.next = NULL;
     AVAIL[order]->meta.prev = NULL;
@@ -211,7 +211,7 @@ void *buddy_malloc(size_t size)
             }
             tmp->meta.prev = NULL;
             tmp->meta.next = NULL;
-            tmp->meta.tag = 0;
+            tmp->meta.isFree = 0;
             //tmp->meta.size = (size_t)1 << k;
             tmp++;
             rval = (void *) tmp;
@@ -297,7 +297,7 @@ void buddy_free(void *ptr)
     // if the size > 512, unmmap
     block *temp = (block *)(ptr - sizeof(block));
     //if (temp->meta.size > 512) {
-    if (temp->meta.magic == 654321 && temp->meta.tag== 0) {
+    if (temp->meta.magic == 654321 && temp->meta.isFree == 0) {
         block *prev = temp->meta.prev;
         block *next = temp->meta.next;
 
@@ -314,11 +314,11 @@ void buddy_free(void *ptr)
         munmap(temp, temp->meta.size);
 //        MALLOC_UNLOCK;
         return;
-    } else if (temp->meta.magic == 123456 && temp->meta.tag == 0) {
+    } else if (temp->meta.magic == 123456 && temp->meta.isFree == 0) {
 //        block *temp = (block *) ptr;
 //        temp--;
 
-        if (temp->meta.tag) {
+        if (temp->meta.isFree) {
             perror("Attempting to free already freed pointer\n");
             //      exit(1);
             return;
@@ -338,7 +338,7 @@ void buddy_free(void *ptr)
 
             // MIRACLE WORKER
             if (k == BUD->meta.kval)
-                buddy = BUD->meta.tag;
+                buddy = BUD->meta.isFree;
         }
         if (buddy) {
             block *PREV = BUD->meta.prev;
@@ -367,7 +367,7 @@ void buddy_free(void *ptr)
 
             k++;
             head->meta.kval = k;
-            head->meta.tag = 0;
+            head->meta.isFree = 0;
             head->meta.size = (size_t)(1<<k);
             head++;
 
@@ -394,7 +394,7 @@ void buddy_free(void *ptr)
             }
             temp->meta.kval = k;
             temp->meta.next = NULL;
-            temp->meta.tag = 1;
+            temp->meta.isFree = 1;
             temp->meta.size = (size_t)(1 << k);
         }
 
@@ -420,10 +420,6 @@ unsigned get_k(size_t size)
         calcSize = ((size_t) 1 << ++k) - sizeof(block);
         //      printf("calcSize = %lu\n", calcSize);
     }
-
-    // If the first 4 pages are all used up, we will need allocate another 4 pages
-
-
     //printf("get_k: End of getk\n");
     return k;
 }
@@ -467,7 +463,7 @@ void split(unsigned k)
 
         // Add block of max size to the mth list
         AVAIL[m] = (block *)ptr;
-        AVAIL[m]->meta.tag = 1;
+        AVAIL[m]->meta.isFree = 1;
         AVAIL[m]->meta.kval = m;
         AVAIL[m]->meta.next = NULL;
         AVAIL[m]->meta.prev = NULL;
@@ -520,7 +516,7 @@ void split(unsigned k)
             tmp->meta.prev = NULL;
         }
 
-        tmp->meta.tag = 1;
+        tmp->meta.isFree = 1;
         tmp->meta.kval = k - 1;
         tmp->meta.size = (size_t)(1 << (k - 1));
         //      (block*) ((((void*)TMP - BASE) + ((size_t)1<<k)) + BASE);
@@ -528,7 +524,7 @@ void split(unsigned k)
         //      printf("split: tmp=%p sex=%p from %u to %u\n", tmp, SEC, k, k-1);
         //      printf("split: tmp=%zx sex=%zx\n", (size_t)tmp - (size_t) BASE ,(size_t) SEC - (size_t) BASE);
         tmp->meta.next = SEC;
-        SEC->meta.tag = 1;
+        SEC->meta.isFree = 1;
         SEC->meta.kval = k - 1;
         SEC->meta.next = NULL;
         SEC->meta.prev = tmp;
