@@ -24,6 +24,7 @@ union ublock {
         size_t kval;
         union ublock *prev;
         union ublock *next;
+        union ublock *fourPageBase;
         size_t size;
         pthread_t tid;
         int magic;
@@ -43,11 +44,17 @@ static unsigned MAX;
 
 static int COUNT = 0;
 
+static unsigned long long sbrkSize = 0;
+static unsigned long long mmapSize = 0;
+
+static unsigned long long numOfFourPage = 0;
+static unsigned long long numOfMmap = 0;
+
 void *malloc(size_t size)
 {
     MALLOC_LOCK;
     COUNT++;
-    printf("COUNT: %d\n", COUNT);
+    //printf("COUNT: %d\n", COUNT);
 
     void * ret = buddy_malloc(size);
     MALLOC_UNLOCK;
@@ -68,7 +75,7 @@ void free(void *ptr)
 void *calloc(size_t nmemb, size_t size)
 {
     COUNT++;
-    printf("COUNT: %d\n", COUNT);
+    //printf("COUNT: %d\n", COUNT);
     //printf("interposed: buddy_calloc\n");
 
     return buddy_calloc(nmemb, size);
@@ -77,7 +84,7 @@ void *calloc(size_t nmemb, size_t size)
 void *realloc(void *ptr, size_t size)
 {
     COUNT++;
-    printf("COUNT: %d\n", COUNT);
+    //printf("COUNT: %d\n", COUNT);
     //printf("interposed: buddy_realloc\n");
     return buddy_realloc(ptr, size);
 
@@ -86,6 +93,8 @@ void *realloc(void *ptr, size_t size)
 void buddy_init()
 {
     unsigned order = HIGH_EXPONENT;
+    sbrkSize += (unsigned long long)(1 << order);
+    numOfFourPage++;
     void * base = sbrk(1 << order);
     if (base < 0 || errno == ENOMEM) {
         errno = ENOMEM;
@@ -105,16 +114,17 @@ void buddy_init()
     AVAIL[order]->meta.size = (size_t)(1 << order);
     AVAIL[order]->meta.tid = pthread_self();
     AVAIL[order]->meta.magic=123456;
+    AVAIL[order]->meta.fourPageBase = BASE;
 }
 
 void *buddy_calloc(size_t num, size_t size)
 {
     MALLOC_LOCK;
-    printf("**************IN CALLOC**************\n");
-    if (num == 0 || size == 0) {
-        MALLOC_UNLOCK;
-        return NULL;
-    }
+    //printf("**************IN CALLOC**************\n");
+//    if (num == 0 || size == 0) {
+//        MALLOC_UNLOCK;
+//        return NULL;
+//    }
 
     // allocate block of memory num * size bytes
     //if (BASE == NULL)
@@ -137,29 +147,33 @@ void *buddy_malloc(size_t size)
 {
     // if the size > 512, mmap
 //    MALLOC_LOCK;
-    printf("**************IN MALLOC**************\n");
+    //printf("**************IN MALLOC**************\n");
     if (size + sizeof(block) > 512) {
         size_t allocSize = size + sizeof(block);
         void *a = mmap(0, allocSize, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-        printf("mmaped %d size at %p\n", (int)allocSize, a);
+
+        mmapSize += (unsigned long long)allocSize;
+        numOfMmap++;
+
+        //printf("mmaped %d size at %p\n", (int)allocSize, a);
         block * cur = (block *)a;
         cur->meta.size = allocSize;
         cur->meta.prev = NULL;
         cur->meta.tid = pthread_self();
         cur->meta.kval = 1;
         cur->meta.magic = 654321;
+        cur->meta.isFree=0;
         if (ublockHead == NULL){
             cur->meta.next = NULL;
             ublockHead = cur;
-        }
-        else {
+        } else {
             ublockHead->meta.prev = cur;
             cur->meta.next = ublockHead;
             ublockHead = cur;
         }
         void * returnPtr = a + sizeof(block);
 //        MALLOC_UNLOCK;
-        printf("after mmap!!!!!!!!!!!!!!!!!!!!!****************\n");
+        //printf("after mmap!!!!!!!!!!!!!!!!!!!!!****************\n");
         return returnPtr;
     } else{
         // First time BASE is NULL
@@ -182,7 +196,7 @@ void *buddy_malloc(size_t size)
         // if kth list is null, split on k+1 if its not the max k
 //        if (k < MAX && curr == NULL) {
         if (curr == NULL) {
-            printf("b_malloc: Splitting on %u\n", k+1);
+            //printf("b_malloc: Splitting on %u\n", k+1);
             split(k + 1);
         }
 
@@ -219,7 +233,7 @@ void *buddy_malloc(size_t size)
             errno = ENOMEM;
             //      perror("Couldn't allocate memory, in buddy_malloc");
         }
-        printf("b_malloc: End of bmalloc\n");
+        //printf("b_malloc: End of bmalloc\n");
 //    MALLOC_UNLOCK;
         return rval;
     }
@@ -228,7 +242,7 @@ void *buddy_malloc(size_t size)
 void *buddy_realloc(void *ptr, size_t size)
 {
     MALLOC_LOCK;
-    printf("**************IN REALLOC************** size: %d\n", (int)size);
+    //printf("**************IN REALLOC************** size: %d\n", (int)size);
     if (ptr == NULL) {
         void * ret =buddy_malloc(size);
         MALLOC_UNLOCK;
@@ -273,13 +287,13 @@ void *buddy_realloc(void *ptr, size_t size)
         }
 
         memcpy(rval, ptr, cpySize);
-        printf("BEFORE BUDDY_FREE, AFTER MEMCPY\n");
+        //printf("BEFORE BUDDY_FREE, AFTER MEMCPY\n");
         buddy_free(ptr);
     } else {
         rval = ptr;
     }
     MALLOC_UNLOCK;
-    printf("**************IN REALLOC DONE**************\n");
+    //printf("**************IN REALLOC DONE**************\n");
 
     return rval;
 }
@@ -308,10 +322,13 @@ void buddy_free(void *ptr)
         }
 
         if (next != NULL) {
-            next->meta.prev = temp->meta.prev;
+            next->meta.prev = prev;
         }
 
-        munmap(temp, temp->meta.size);
+        temp->meta.isFree = 1;
+        temp->meta.prev = NULL;
+        temp->meta.next = NULL;
+        munmap((void *)temp, temp->meta.size);
 //        MALLOC_UNLOCK;
         return;
     } else if (temp->meta.magic == 123456 && temp->meta.isFree == 0) {
@@ -331,8 +348,8 @@ void buddy_free(void *ptr)
 
         if (k < MAX) {
 
-            BUD = (block *) ((((size_t) temp - (size_t) BASE) ^ ((size_t)(1 << k)))
-                             + (size_t) BASE);
+            BUD = (block *) ((((size_t) temp - (size_t)temp->meta.fourPageBase) ^ ((size_t)(1 << k)))
+                             + (size_t)temp->meta.fourPageBase);
             //printf("b_free: Bud->tag=%u, k=%u, &=%p\n", BUD->tag, BUD->kval, BUD);
             //printf("b_free: tmp=%zx bud=%zx k=%u\n", (size_t)TMP - (size_t) BASE ,(size_t) BUD - (size_t) BASE, k);
 
@@ -442,9 +459,12 @@ void split(unsigned k)
     } else if (curr == NULL && k + 1 > HIGH_EXPONENT) {
 
         // Allocate 4 more pages
-        printf("************************************************\n");
-        printf("Allocate 4 more pages\n");
-        printf("************************************************\n");
+//        printf("************************************************\n");
+//        printf("Allocate 4 more pages\n");
+//        printf("************************************************\n");
+        sbrkSize+= (unsigned long long)(1 << HIGH_EXPONENT);
+        numOfFourPage++;
+
         unsigned m = HIGH_EXPONENT;
         void * ptr = sbrk(1 << m);
         while (ptr < 0 || errno == ENOMEM) {
@@ -470,6 +490,7 @@ void split(unsigned k)
         AVAIL[m]->meta.size = (size_t)(1 << m);
         AVAIL[m]->meta.tid = pthread_self();
         AVAIL[m]->meta.magic=123456;
+        AVAIL[m]->meta.fourPageBase = (block *)ptr;
     }
 
     block * curr2 = AVAIL[k];
@@ -477,16 +498,17 @@ void split(unsigned k)
         curr2 = curr2->meta.next;
     }
 
-
     // we can split now
     if (curr2 != NULL) {
         //      printf("split: AVAIL[k] isn't NULL\n");
+        // ???? tmp, curr2 why create two?
         block *tmp = curr2;
         block *PREV = curr2->meta.prev;
         block *NEXT = curr2->meta.next;
 
         if (PREV == NULL) {
             //printf("b_free: BUD PREV was NULL\n");
+            // Remove current by moving the pointer to the next node
             AVAIL[k] = NEXT;
         } else {
             PREV->meta.next = NEXT;
@@ -501,6 +523,7 @@ void split(unsigned k)
         if (NEXT != NULL) {
             NEXT->meta.prev = PREV;
         }
+
         tmp->meta.prev = NULL;
         tmp->meta.next = NULL;
 
@@ -520,6 +543,8 @@ void split(unsigned k)
         tmp->meta.kval = k - 1;
         tmp->meta.size = (size_t)(1 << (k - 1));
         //      (block*) ((((void*)TMP - BASE) + ((size_t)1<<k)) + BASE);
+
+        // ????
         block *SEC = (block *) ((size_t) tmp + ((size_t)(1 << (k - 1))));
         //      printf("split: tmp=%p sex=%p from %u to %u\n", tmp, SEC, k, k-1);
         //      printf("split: tmp=%zx sex=%zx\n", (size_t)tmp - (size_t) BASE ,(size_t) SEC - (size_t) BASE);
@@ -531,10 +556,43 @@ void split(unsigned k)
         SEC->meta.size = (size_t)(1 << (k - 1));
         SEC->meta.tid = tmp->meta.tid;
         SEC->meta.magic=123456;
-        printf("Split: AVAIL[%u] &=%p, AVAIL[%u]->next &%p\n", k-1, AVAIL[k-1], k-1,  SEC);
+        SEC->meta.fourPageBase=tmp->meta.fourPageBase;
+        //printf("Split: AVAIL[%u] &=%p, AVAIL[%u]->next &%p\n", k-1, AVAIL[k-1], k-1,  SEC);
     }
-    printf("Split: Finished split at k= %u\n", k);
+    //printf("Split: Finished split at k= %u\n", k);
     return;
+}
+
+void malloc_stats() {
+    block *curr;
+    for (int k = 0; k <= HIGH_EXPONENT; k++) {
+        printf("Printing AVAIL[%d]\n", k);
+        if (AVAIL[k] != NULL) {
+            int i=0;
+            curr = AVAIL[k];
+            while(curr != NULL) {
+                printf("the free node %d, free is %zu, the size is %zu, tid: %lu\n",i,curr->meta.isFree,curr->meta.size, curr->meta.tid);
+                curr = curr->meta.next;
+                i++;
+            }
+        } else {
+            printf("the size %d is empty\n",k);
+        }
+    }
+    printf("from %p to %p, the page total size is %llu\n",BASE,sbrk(0),(long long unsigned)sbrk(0)-(long long unsigned)BASE);
+    curr = ublockHead;
+    while(curr!=NULL){
+        printf("curr size is %zu,free=%zu, tid: %lu\n",curr->meta.size,curr->meta.isFree, curr->meta.tid);
+        curr = curr->meta.next;
+    }
+    printf("Current thread ID: %lu\n", pthread_self());
+    void * currAddr = sbrk(0);
+    //printf("Total size of arena allocated with sbrk: %llu\n", (unsigned long long) (currAddr - (void *)BASE));
+    //printf("Total size of arena allocated with mmap: %llu\n", (unsigned long long) (currAddr - (void *)ublockHead));
+    printf("Total number of sbrk bins: %llu\n", numOfFourPage);
+    printf("Total number of mmap bins: %llu (double counting the size that gets realloced)\n", numOfMmap);
+    printf("Total size of sbrk: %llu\n", sbrkSize);
+    printf("Total size of mmap: %llu\n", mmapSize);
 }
 
 

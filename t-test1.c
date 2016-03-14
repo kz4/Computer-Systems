@@ -7,9 +7,11 @@
  * Fixed condition variable usage, and ported to windows
  * Steven Fuerst 2009
  */
+#include <unistd.h>
+#include <sys/wait.h>
 
 #define USE_PTHREADS	1
-#define USE_MALLOC	0
+#define USE_MALLOC	1
 #define USE_SPROC	0
 #define USE_THR		0
 
@@ -59,10 +61,10 @@ typedef struct _pthread_v *pthread_t;
 static int pthread_create_wrapper(void *args)
 {
 	struct _pthread_v *tv = args;
-	
+
 	/* Call function and save return value */
 	tv->retval = tv->func(tv->arg);
-	
+
 	return 0;
 }
 
@@ -70,14 +72,14 @@ static int pthread_create_wrapper(void *args)
 static int pthread_create(pthread_t *th, void *attr, void *(* func)(void *), void *arg)
 {
 	struct _pthread_v *tv = calloc(1, sizeof(struct _pthread_v));
-	
+
 	/* Ignore attributes for now */
 	(void) attr;
-	
+
 	if (!tv) return 1;
-	
+
 	*th = tv;
-	
+
 	/* Save data in pthread_t */
 	tv->arg = arg;
 	tv->func = func;
@@ -90,17 +92,17 @@ static int pthread_create(pthread_t *th, void *attr, void *(* func)(void *), voi
 static int pthread_join(pthread_t t, void **res)
 {
 	struct _pthread_v *tv = t;
-	
+
 	WaitForSingleObject(tv->h, INFINITE);
 	CloseHandle(tv->h);
-	
+
 	/* Obtain return value */
 	if (res)
 	{
 		/* Hack - get correct return value, not the copy passed to us */
 		*res = tv->retval;
 	}
-	
+
 	free(tv);
 
 	return 0;
@@ -108,7 +110,7 @@ static int pthread_join(pthread_t t, void **res)
 
 #define pthread_mutex_lock EnterCriticalSection
 #define pthread_mutex_unlock LeaveCriticalSection
-#define pthread_mutex_trylock(L) (TryEnterCriticalSection(L) + EBUSY) 
+#define pthread_mutex_trylock(L) (TryEnterCriticalSection(L) + EBUSY)
 #define pthread_mutex_t CRITICAL_SECTION
 #define pthread_mutex_init(L, A) InitializeCriticalSection(L)
 #define pthread_mutex_destroy(L) DeleteCriticalSection(L)
@@ -177,13 +179,13 @@ static inline unsigned rng(void)
 {
 	unsigned long long c = 7319936632422683443ULL;
 	unsigned long long x = (rnd_seed += c);
-	
+
 	x ^= x >> 32;
 	x *= c;
 	x ^= x >> 32;
 	x *= c;
 	x ^= x >> 32;
-	
+
 	/* Return lower 32bits */
 	return x;
 }
@@ -250,7 +252,7 @@ static int zero_check(void *p, size_t size)
 		size -= sizeof(*ptr);
 	}
 	ptr2 = (unsigned char*)ptr;
-	
+
 	while (size > 0)
 	{
 		if (*ptr2++) return -1;
@@ -317,7 +319,7 @@ static void bin_alloc(struct bin *m, size_t size, unsigned r)
 		printf("out of memory (r=%d, size=%ld)!\n", r, (unsigned long)size);
 		exit(1);
 	}
-	
+
 	m->size = size;
 #if TEST > 0
 	mem_init(m->ptr, m->size);
@@ -385,9 +387,9 @@ static void malloc_test(void *ptr, size_t stack_len)
 	struct bin_info p;
 
 	rnd_seed = st->seed;
-	
+
 #ifdef TEST_FORK
-	if (!RANDOM(TEST_FORK)) 
+	if (!RANDOM(TEST_FORK))
 	{
 		int status;
 
@@ -415,14 +417,14 @@ static void malloc_test(void *ptr, size_t stack_len)
 		p.m[b].ptr = NULL;
 		if (!RANDOM(2)) bin_alloc(&p.m[b], RANDOM(p.size) + 1, rng());
 	}
-	
+
 	for (i = 0; i <= st->max;)
 	{
 #if TEST > 1
 		bin_test(&p);
 #endif
 		actions = RANDOM(ACTIONS_MAX);
-		
+
 #if USE_MALLOC && MALLOC_DEBUG
 		if (actions < 2) mallinfo();
 #endif
@@ -433,7 +435,7 @@ static void malloc_test(void *ptr, size_t stack_len)
 		}
 		i += actions;
 		actions = RANDOM(ACTIONS_MAX);
-		
+
 		for (j = 0; j < actions; j++)
 		{
 			b = RANDOM(p.bins);
@@ -445,13 +447,13 @@ static void malloc_test(void *ptr, size_t stack_len)
 
 		i += actions;
 	}
-	
+
 	for (b = 0; b < p.bins; b++) bin_free(&p.m[b]);
-	
+
 	free(p.m);
-	
+
 #ifdef TEST_FORK
-end:
+	end:
 #endif
 #if USE_PTHREADS
 	if (pid > 0)
