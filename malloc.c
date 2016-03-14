@@ -95,7 +95,10 @@ void buddy_init()
     unsigned order = HIGH_EXPONENT;
     sbrkSize += (unsigned long long)(1 << order);
     numOfFourPage++;
-    void * base = sbrk(1 << order);
+    //void * base = sbrk(1 << order);
+    long onPpageSize = sysconf(_SC_PAGESIZE);
+    void * base = sbrk(4 * onPpageSize);
+
     if (base < 0 || errno == ENOMEM) {
         errno = ENOMEM;
         exit(1);
@@ -466,7 +469,10 @@ void split(unsigned k)
         numOfFourPage++;
 
         unsigned m = HIGH_EXPONENT;
-        void * ptr = sbrk(1 << m);
+//        void * ptr = sbrk(1 << m);
+        long onPpageSize = sysconf(_SC_PAGESIZE);
+        void * ptr = sbrk(4 * onPpageSize);
+
         while (ptr < 0 || errno == ENOMEM) {
 //        m--;
 //        BASE = sbrk(1UL << m);
@@ -586,7 +592,7 @@ void malloc_stats() {
         curr = curr->meta.next;
     }
     printf("Current thread ID: %lu\n", pthread_self());
-    void * currAddr = sbrk(0);
+    //void * currAddr = sbrk(0);
     //printf("Total size of arena allocated with sbrk: %llu\n", (unsigned long long) (currAddr - (void *)BASE));
     //printf("Total size of arena allocated with mmap: %llu\n", (unsigned long long) (currAddr - (void *)ublockHead));
     printf("Total number of sbrk bins: %llu\n", numOfFourPage);
