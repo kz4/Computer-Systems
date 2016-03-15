@@ -34,11 +34,11 @@ union ublock {
 
 typedef union ublock block;
 
-static block *BASE = NULL;
+static block *BUDDY_HEAD = NULL;
 
 static block *AVAIL[HIGH_EXPONENT + 1];
 
-static block * ublockHead = NULL;
+static block *LARGE_BLOCK_HEAD = NULL;
 
 static unsigned MAX;
 
@@ -50,9 +50,15 @@ static unsigned long long mmapSize = 0;
 static unsigned long long numOfFourPage = 0;
 static unsigned long long numOfMmap = 0;
 
+static unsigned long long totalAllocationRequests = 0;
+static unsigned long long totalFreeRequests = 0;
+
+static unsigned long long totalNumberOfBlocks = 0;
+
 void *malloc(size_t size)
 {
     MALLOC_LOCK;
+    totalAllocationRequests++;
     COUNT++;
     //printf("COUNT: %d\n", COUNT);
 
@@ -63,8 +69,8 @@ void *malloc(size_t size)
 
 void free(void *ptr)
 {
-    //printf("interposed: buddy_free\n");
     MALLOC_LOCK;
+    totalFreeRequests++;
     if (ptr != NULL) {
         buddy_free(ptr);
     }
@@ -76,7 +82,6 @@ void *calloc(size_t nmemb, size_t size)
 {
     COUNT++;
     //printf("COUNT: %d\n", COUNT);
-    //printf("interposed: buddy_calloc\n");
 
     return buddy_calloc(nmemb, size);
 }
@@ -85,7 +90,6 @@ void *realloc(void *ptr, size_t size)
 {
     COUNT++;
     //printf("COUNT: %d\n", COUNT);
-    //printf("interposed: buddy_realloc\n");
     return buddy_realloc(ptr, size);
 
 }
@@ -104,9 +108,9 @@ void buddy_init()
         exit(1);
     }
 
-    // Now have k value for block size.
+    // Now have order value for block size.
     MAX = order;
-    BASE = (block *) base;
+    BUDDY_HEAD = (block *) base;
 
     // Add block of max size to the mth list
     AVAIL[order] = (block *) base;
@@ -117,26 +121,14 @@ void buddy_init()
     AVAIL[order]->meta.size = (size_t)(1 << order);
     AVAIL[order]->meta.tid = pthread_self();
     AVAIL[order]->meta.magic=123456;
-    AVAIL[order]->meta.fourPageBase = BASE;
+    AVAIL[order]->meta.fourPageBase = BUDDY_HEAD;
 }
 
 void *buddy_calloc(size_t num, size_t size)
 {
     MALLOC_LOCK;
-    //printf("**************IN CALLOC**************\n");
-//    if (num == 0 || size == 0) {
-//        MALLOC_UNLOCK;
-//        return NULL;
-//    }
-
-    // allocate block of memory num * size bytes
-    //if (BASE == NULL)
-    //    buddy_init((size_t) (size * num));
-
-//    MALLOC_UNLOCK;
     void *rval = buddy_malloc(num * size);
 
-//    MALLOC_LOCK;
     // MUST INITIALIZE NEW DATA TO ZERO
     if (rval != NULL) {
         memset(rval, 0, num * size);
@@ -149,8 +141,6 @@ void *buddy_calloc(size_t num, size_t size)
 void *buddy_malloc(size_t size)
 {
     // if the size > 512, mmap
-//    MALLOC_LOCK;
-    //printf("**************IN MALLOC**************\n");
     if (size + sizeof(block) > 512) {
         size_t allocSize = size + sizeof(block);
         void *a = mmap(0, allocSize, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
@@ -166,28 +156,25 @@ void *buddy_malloc(size_t size)
         cur->meta.kval = 1;
         cur->meta.magic = 654321;
         cur->meta.isFree=0;
-        if (ublockHead == NULL){
+        if (LARGE_BLOCK_HEAD == NULL){
             cur->meta.next = NULL;
-            ublockHead = cur;
+            LARGE_BLOCK_HEAD = cur;
         } else {
-            ublockHead->meta.prev = cur;
-            cur->meta.next = ublockHead;
-            ublockHead = cur;
+            LARGE_BLOCK_HEAD->meta.prev = cur;
+            cur->meta.next = LARGE_BLOCK_HEAD;
+            LARGE_BLOCK_HEAD = cur;
         }
         void * returnPtr = a + sizeof(block);
-//        MALLOC_UNLOCK;
-        //printf("after mmap!!!!!!!!!!!!!!!!!!!!!****************\n");
         return returnPtr;
     } else{
-        // First time BASE is NULL
-        if (BASE == NULL){
-            printf("First time BASE is NULL, BUDDY_INIT");
+        // First time BUDDY_HEAD is NULL
+        if (BUDDY_HEAD == NULL){
+            printf("First time BUDDY_HEAD is NULL, BUDDY_INIT");
             buddy_init();
         }
 
         // loop to find size of k
         unsigned k = get_k(size);
-//    printf("b_malloc:  k= %u\n", k);
 
         void *rval = NULL;
 
@@ -197,10 +184,9 @@ void *buddy_malloc(size_t size)
         }
 
         // if kth list is null, split on k+1 if its not the max k
-//        if (k < MAX && curr == NULL) {
         if (curr == NULL) {
-            //printf("b_malloc: Splitting on %u\n", k+1);
             split(k + 1);
+            totalNumberOfBlocks++;
         }
 
         block * curr2 = AVAIL[k];
@@ -208,11 +194,7 @@ void *buddy_malloc(size_t size)
             curr2 = curr2->meta.next;
         }
 
-//        if (k <= MAX && AVAIL[k] != NULL) {
         if (curr2 != NULL) {
-            //      printf("b_malloc: AVAIL[%u] not null\n", k);
-//              printf("ours!!! b_malloc: AVAIL[%d] tag=%d\n", (int)AVAIL[k]->meta.kval , (int)AVAIL[k]->meta.tag);
-
             block *tmp = curr2;
             block * prev = curr2->meta.prev;
             block *next = curr2->meta.next;
@@ -234,10 +216,7 @@ void *buddy_malloc(size_t size)
             rval = (void *) tmp;
         } else {
             errno = ENOMEM;
-            //      perror("Couldn't allocate memory, in buddy_malloc");
         }
-        //printf("b_malloc: End of bmalloc\n");
-//    MALLOC_UNLOCK;
         return rval;
     }
 }
@@ -245,7 +224,6 @@ void *buddy_malloc(size_t size)
 void *buddy_realloc(void *ptr, size_t size)
 {
     MALLOC_LOCK;
-    //printf("**************IN REALLOC************** size: %d\n", (int)size);
     if (ptr == NULL) {
         void * ret =buddy_malloc(size);
         MALLOC_UNLOCK;
@@ -257,17 +235,12 @@ void *buddy_realloc(void *ptr, size_t size)
         MALLOC_UNLOCK;
         return ptr;
     }
-    // this should never be the case, but we'll take it
-//    if (BASE == NULL) {
-//        buddy_init(size);
-//        printf("this should never be the case, but we'll take it");
-//    }
+    // this should
 
     void *rval;
 
     block *TMP = (block *) ptr;
     TMP--;
-
 
 //    size_t oldSize = (1 << TMP->meta.kval) - sizeof(block);
     size_t oldSize = TMP->meta.size - sizeof(block);
@@ -303,14 +276,10 @@ void *buddy_realloc(void *ptr, size_t size)
 
 void buddy_free(void *ptr)
 {
-//    MALLOC_LOCK;
     if (ptr == NULL)
     {
-//        MALLOC_UNLOCK;
         return;
     }
-    //printf("b_free: Start of free\n");
-
     // if the size > 512, unmmap
     block *temp = (block *)(ptr - sizeof(block));
     //if (temp->meta.size > 512) {
@@ -319,7 +288,7 @@ void buddy_free(void *ptr)
         block *next = temp->meta.next;
 
         if (prev == NULL) {
-            ublockHead = next;
+            LARGE_BLOCK_HEAD = next;
         } else {
             prev->meta.next = next;
         }
@@ -332,18 +301,12 @@ void buddy_free(void *ptr)
         temp->meta.prev = NULL;
         temp->meta.next = NULL;
         munmap((void *)temp, temp->meta.size);
-//        MALLOC_UNLOCK;
         return;
     } else if (temp->meta.magic == 123456 && temp->meta.isFree == 0) {
-//        block *temp = (block *) ptr;
-//        temp--;
-
         if (temp->meta.isFree) {
             perror("Attempting to free already freed pointer\n");
-            //      exit(1);
             return;
         }
-        //printf("b_free: Block->tag=%u, k=%u, &=%p\n", TMP->tag, TMP->kval, TMP);
 
         size_t buddy = 0;
         block *BUD = NULL;
@@ -354,7 +317,7 @@ void buddy_free(void *ptr)
             BUD = (block *) ((((size_t) temp - (size_t)temp->meta.fourPageBase) ^ ((size_t)(1 << k)))
                              + (size_t)temp->meta.fourPageBase);
             //printf("b_free: Bud->tag=%u, k=%u, &=%p\n", BUD->tag, BUD->kval, BUD);
-            //printf("b_free: tmp=%zx bud=%zx k=%u\n", (size_t)TMP - (size_t) BASE ,(size_t) BUD - (size_t) BASE, k);
+            //printf("b_free: tmp=%zx bud=%zx k=%u\n", (size_t)TMP - (size_t) BUDDY_HEAD ,(size_t) BUD - (size_t) BUDDY_HEAD, k);
 
             // MIRACLE WORKER
             if (k == BUD->meta.kval)
@@ -374,16 +337,12 @@ void buddy_free(void *ptr)
                 NEXT->meta.prev = BUD->meta.prev;
             }
 
-            //printf("b_free: Buddy Available!\n");
-
             block * head;
             // Find the address that is smallest
             if (BUD < temp)
                 head = BUD;
             else
                 head = temp;
-            //printf("b_free: Mask=%zx, k=%u\n",((size_t) 1 << (TMP->kval)), TMP->kval);
-            //printf("b_free: Merged&=%p k=%u, T&=%p, B&=%p k=%u\n", MERGE, k+1, TMP, BUD, k);
 
             k++;
             head->meta.kval = k;
@@ -392,7 +351,7 @@ void buddy_free(void *ptr)
             head++;
 
             buddy_free((void *) head);
-
+            totalNumberOfBlocks--;
         } else {
             //printf("b_free: no buddy\n");
             if (AVAIL[k] == NULL){
@@ -401,16 +360,11 @@ void buddy_free(void *ptr)
             }
             else {
                 block *curr = AVAIL[k];
-                //printf("b_free: curr=%p k=%u, TMP&=%p k=%u\n", curr, k, TMP, TMP->kval);
-//            if (curr != NULL) {
                 while (curr->meta.next != NULL) {
                     curr = curr->meta.next;
                 }
                 temp->meta.prev = curr;
                 curr->meta.next = temp;
-//            } else {
-//                AVAIL[k] = TMP;
-//            }
             }
             temp->meta.kval = k;
             temp->meta.next = NULL;
@@ -418,29 +372,19 @@ void buddy_free(void *ptr)
             temp->meta.size = (size_t)(1 << k);
         }
 
-        //printf("b_free: End of buddy free\n");
-//    MALLOC_UNLOCK;
         return;
     }
 }
 
-/*
- * Returns the k for that size
- */
 unsigned get_k(size_t size)
 {
-    //printf("get_k: Start of getk\n");
     unsigned k = LOW_EXPONENT;
 
     size_t calcSize = (1 << k) - sizeof(block);
-    //if (!calcSize) printf ("get_k: k is too small\n");
-    //printf("actualSize = %llu, hex = 0x%llx \n", actualSize, actualSize);
     while (size > calcSize) {
 //    while (size > calcSize && k < HIGH_EXPONENT) {
         calcSize = ((size_t) 1 << ++k) - sizeof(block);
-        //      printf("calcSize = %lu\n", calcSize);
     }
-    //printf("get_k: End of getk\n");
     return k;
 }
 
@@ -451,7 +395,6 @@ unsigned get_k(size_t size)
  */
 void split(unsigned k)
 {
-    //printf("split: Start of split k=%u\n", k);
     block * curr = AVAIL[k];
     while (curr != NULL && curr->meta.tid != pthread_self()) {
         curr = curr->meta.next;
@@ -459,36 +402,36 @@ void split(unsigned k)
 
     if (curr == NULL && k + 1 <= HIGH_EXPONENT) {
         split(k + 1);
+        totalNumberOfBlocks++;
     } else if (curr == NULL && k + 1 > HIGH_EXPONENT) {
 
         // Allocate 4 more pages
-//        printf("************************************************\n");
-//        printf("Allocate 4 more pages\n");
-//        printf("************************************************\n");
         sbrkSize+= (unsigned long long)(1 << HIGH_EXPONENT);
         numOfFourPage++;
 
         unsigned m = HIGH_EXPONENT;
 //        void * ptr = sbrk(1 << m);
-        long onPpageSize = sysconf(_SC_PAGESIZE);
-        void * ptr = sbrk(4 * onPpageSize);
+        long onePageSize = sysconf(_SC_PAGESIZE);
+        void * ptr = sbrk(4 * onePageSize);
 
-        while (ptr < 0 || errno == ENOMEM) {
-//        m--;
-//        BASE = sbrk(1UL << m);
-//
-//        if (BASE < 0
-//            && (size > ((1UL << m) - sizeof(block)) || m < LOW_EXPONENT)) {
-//            errno = ENOMEM;
-//            exit(1);
-//        }
+        if (ptr < 0 || errno == ENOMEM) {
             errno = ENOMEM;
             exit(1);
         }
 
+        block * cur = ptr;
 
-        // Add block of max size to the mth list
-        AVAIL[m] = (block *)ptr;
+        // Put the new 4 pages in the front of AVAIL[m]
+        if (AVAIL[m] == NULL){
+            cur->meta.next = NULL;
+            AVAIL[m] = cur;
+        } else {
+            AVAIL[m]->meta.prev = cur;
+            cur->meta.next = AVAIL[m];
+            AVAIL[m] = cur;
+        }
+
+        //AVAIL[m] = (block *)ptr;
         AVAIL[m]->meta.isFree = 1;
         AVAIL[m]->meta.kval = m;
         AVAIL[m]->meta.next = NULL;
@@ -513,7 +456,6 @@ void split(unsigned k)
         block *NEXT = curr2->meta.next;
 
         if (PREV == NULL) {
-            //printf("b_free: BUD PREV was NULL\n");
             // Remove current by moving the pointer to the next node
             AVAIL[k] = NEXT;
         } else {
@@ -548,12 +490,10 @@ void split(unsigned k)
         tmp->meta.isFree = 1;
         tmp->meta.kval = k - 1;
         tmp->meta.size = (size_t)(1 << (k - 1));
-        //      (block*) ((((void*)TMP - BASE) + ((size_t)1<<k)) + BASE);
+        //      (block*) ((((void*)TMP - BUDDY_HEAD) + ((size_t)1<<k)) + BUDDY_HEAD);
 
         // ????
         block *SEC = (block *) ((size_t) tmp + ((size_t)(1 << (k - 1))));
-        //      printf("split: tmp=%p sex=%p from %u to %u\n", tmp, SEC, k, k-1);
-        //      printf("split: tmp=%zx sex=%zx\n", (size_t)tmp - (size_t) BASE ,(size_t) SEC - (size_t) BASE);
         tmp->meta.next = SEC;
         SEC->meta.isFree = 1;
         SEC->meta.kval = k - 1;
@@ -563,9 +503,7 @@ void split(unsigned k)
         SEC->meta.tid = tmp->meta.tid;
         SEC->meta.magic=123456;
         SEC->meta.fourPageBase=tmp->meta.fourPageBase;
-        //printf("Split: AVAIL[%u] &=%p, AVAIL[%u]->next &%p\n", k-1, AVAIL[k-1], k-1,  SEC);
     }
-    //printf("Split: Finished split at k= %u\n", k);
     return;
 }
 
@@ -585,20 +523,21 @@ void malloc_stats() {
             printf("the size %d is empty\n",k);
         }
     }
-    printf("from %p to %p, the page total size is %llu\n",BASE,sbrk(0),(long long unsigned)sbrk(0)-(long long unsigned)BASE);
-    curr = ublockHead;
+    printf("from %p to %p, the page total size is %llu\n", BUDDY_HEAD, sbrk(0), (long long unsigned)sbrk(0) - (long long unsigned) BUDDY_HEAD);
+    curr = LARGE_BLOCK_HEAD;
     while(curr!=NULL){
         printf("curr size is %zu,free=%zu, tid: %lu\n",curr->meta.size,curr->meta.isFree, curr->meta.tid);
         curr = curr->meta.next;
     }
     printf("Current thread ID: %lu\n", pthread_self());
     //void * currAddr = sbrk(0);
-    //printf("Total size of arena allocated with sbrk: %llu\n", (unsigned long long) (currAddr - (void *)BASE));
-    //printf("Total size of arena allocated with mmap: %llu\n", (unsigned long long) (currAddr - (void *)ublockHead));
+    //printf("Total size of arena allocated with sbrk: %llu\n", (unsigned long long) (currAddr - (void *)BUDDY_HEAD));
+    //printf("Total size of arena allocated with mmap: %llu\n", (unsigned long long) (currAddr - (void *)LARGE_BLOCK_HEAD));
     printf("Total number of sbrk bins: %llu\n", numOfFourPage);
     printf("Total number of mmap bins: %llu (double counting the size that gets realloced)\n", numOfMmap);
     printf("Total size of sbrk: %llu\n", sbrkSize);
     printf("Total size of mmap: %llu\n", mmapSize);
+    printf("Total allocation requests: %llu\n", totalAllocationRequests);
+    printf("Total free requests: %llu\n", totalFreeRequests);
+    printf("Total number of blocks: %llu\n", totalNumberOfBlocks);
 }
-
-

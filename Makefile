@@ -5,7 +5,7 @@ CFLAGS=-g -O0 -fPIC
 all:	check
 
 clean:
-	rm -rf libmalloc.so malloc.o t-test1 test1 test1.o
+	rm -rf libmalloc.so malloc.o t-test1 test1 test1.o t-test1.o
 
 libmalloc.so: malloc.o
 	$(CC) $(CFLAGS) -shared -Wl,--unresolved-symbols=ignore-all $< -o $@ -lpthread

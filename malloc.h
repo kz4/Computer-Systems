@@ -6,9 +6,7 @@
 #define HW3_2_MALLOC_H
 
 /*
- * This function initilizes the buddy malloc system
- *
- * @param the size to init, this is ignored and 32 Gb is initialized
+ * This function initilizes the buddy malloc system.
  *
  */
 void buddy_init();
@@ -24,8 +22,7 @@ void *buddy_calloc(size_t, size_t);
 
 
 /*
- * This function returns a pointer to memory to be used. The size of the
- * memory allocated is not likely to be exactle the same memory requested.
+ * This function returns a pointer to memory to be used. mmap if it's a large memory
  *
  * @param size The size of the memory to allocate
  *
@@ -46,15 +43,21 @@ void *buddy_realloc(void *ptr, size_t size);
 
 
 /*
- * This function frees the memory and adds it back to AVAIL list
+ * This function frees the memory and adds it back to AVAIL list or munmap for the large memory.
  *
- * @parama ptr the ptr to memory to free
+ * @parama the pointer to memory to free
  *
  */
 void buddy_free(void *);
 
-
+/*
+ * Split a block into two and so on and so forth.
+ */
 void split(unsigned k);
+
+/*
+ * Get the least order or k that can fit into a block
+ */
 unsigned get_k(size_t size);
 
 #endif //HW3_2_MALLOC_H
